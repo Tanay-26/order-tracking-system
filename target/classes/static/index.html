@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <title>Live Order Tracking</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <style>
+        body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #0f1115; color: #e8eaed; }
+        .wrap { max-width: 900px; margin: 0 auto; padding: 24px; }
+        h1 { font-size: 22px; margin-bottom: 4px; }
+        .sub { color: #9aa0a6; font-size: 13px; margin-bottom: 20px; }
+        .card { background: #1a1d23; border: 1px solid #2a2f3a; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+        input, button { font-size: 14px; padding: 9px 12px; border-radius: 6px; border: 1px solid #2a2f3a; }
+        input { background: #0f1115; color: #e8eaed; width: 240px; }
+        button { background: #3b82f6; color: white; border: none; cursor: pointer; }
+        button:disabled { background: #394150; cursor: not-allowed; }
+        .bar { height: 10px; background: #2a2f3a; border-radius: 6px; overflow: hidden; margin: 12px 0; }
+        .fill { height: 100%; width: 0; background: linear-gradient(90deg,#22c55e,#3b82f6); transition: width .4s ease; }
+        .row { display: flex; gap: 24px; flex-wrap: wrap; }
+        .metric span { display: block; }
+        .metric .k { color: #9aa0a6; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+        .metric .v { font-size: 18px; font-weight: 600; }
+        #log { font-family: ui-monospace, Menlo, monospace; font-size: 12px; height: 260px; overflow-y: auto;
+               background: #0b0d11; border-radius: 8px; padding: 12px; white-space: pre-wrap; }
+        .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#ef4444; margin-right:6px; }
+        .dot.on { background:#22c55e; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <h1>Real-Time Order Tracking</h1>
+    <div class="sub">STOMP over WebSocket &rarr; /topic/orders/{orderRef} and /topic/orders/{orderRef}/location</div>
+
+    <div class="card">
+        <input id="orderRef" placeholder="ORD-XXXXXXXX"/>
+        <button id="connectBtn" onclick="connect()">Track this order</button>
+        <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+        <span style="margin-left:12px"><span id="dot" class="dot"></span><span id="connState">disconnected</span></span>
+    </div>
+
+    <div class="card">
+        <div class="row">
+            <div class="metric"><span class="k">Status</span><span class="v" id="status">-</span></div>
+            <div class="metric"><span class="k">Stage</span><span class="v" id="stage">-</span></div>
+            <div class="metric"><span class="k">Rider lat</span><span class="v" id="lat">-</span></div>
+            <div class="metric"><span class="k">Rider lng</span><span class="v" id="lng">-</span></div>
+            <div class="metric"><span class="k">Speed</span><span class="v" id="speed">-</span></div>
+            <div class="metric"><span class="k">Pings</span><span class="v" id="pings">0</span></div>
+        </div>
+        <div class="bar"><div class="fill" id="fill"></div></div>
+    </div>
+
+    <div class="card"><div id="log">Waiting for a connection...</div></div>
+</div>
+
+<script>
+    let stompClient = null;
+    let pingCount = 0;
+
+    function log(line) {
+        const el = document.getElementById('log');
+        el.textContent += "\n" + new Date().toLocaleTimeString() + "  " + line;
+        el.scrollTop = el.scrollHeight;
+    }
+
+    function connect() {
+        const orderRef = document.getElementById('orderRef').value.trim();
+        if (!orderRef) { alert('Enter an order reference first'); return; }
+
+        const socket = new SockJS('/ws');
+        stompClient = Stomp.over(socket);
+        stompClient.debug = null;
+
+        stompClient.connect({}, function () {
+            document.getElementById('dot').classList.add('on');
+            document.getElementById('connState').textContent = 'connected';
+            document.getElementById('connectBtn').disabled = true;
+            document.getElementById('disconnectBtn').disabled = false;
+            log('Connected. Subscribing to ' + orderRef);
+
+            stompClient.subscribe('/topic/orders/' + orderRef, function (frame) {
+                const m = JSON.parse(frame.body);
+                document.getElementById('status').textContent = m.currentStatus;
+                document.getElementById('stage').textContent = m.stage + ' / ' + m.totalStages;
+                document.getElementById('fill').style.width = m.progressPercentage + '%';
+                log('STATUS  ' + m.previousStatus + ' -> ' + m.currentStatus + '  (' + m.statusDescription + ')');
+            });
+
+            stompClient.subscribe('/topic/orders/' + orderRef + '/location', function (frame) {
+                const m = JSON.parse(frame.body);
+                pingCount++;
+                document.getElementById('lat').textContent = m.latitude.toFixed(5);
+                document.getElementById('lng').textContent = m.longitude.toFixed(5);
+                document.getElementById('speed').textContent = m.speedKmph.toFixed(1) + ' km/h';
+                document.getElementById('pings').textContent = pingCount;
+                log('GPS     ' + m.latitude.toFixed(5) + ', ' + m.longitude.toFixed(5));
+            });
+        }, function (err) {
+            log('Connection error: ' + err);
+            document.getElementById('dot').classList.remove('on');
+            document.getElementById('connState').textContent = 'disconnected';
+        });
+    }
+
+    function disconnect() {
+        if (stompClient) { stompClient.disconnect(); stompClient = null; }
+        document.getElementById('dot').classList.remove('on');
+        document.getElementById('connState').textContent = 'disconnected';
+        document.getElementById('connectBtn').disabled = false;
+        document.getElementById('disconnectBtn').disabled = true;
+        log('Disconnected.');
+    }
+</script>
+</body>
+</html>
